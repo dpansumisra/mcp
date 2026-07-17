@@ -17,11 +17,18 @@ import sys
 from datetime import datetime
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.server import TransportSecuritySettings
 
 # ---------------------------------------------------------------------------
 # Server init
 # ---------------------------------------------------------------------------
-mcp = FastMCP(name="VideoReceiverMCP")
+# Disable DNS Rebinding protection so Render domain is allowed
+mcp = FastMCP(
+    name="VideoReceiverMCP",
+    transport_security=TransportSecuritySettings(
+        enable_dns_rebinding_protection=False
+    )
+)
 
 # Where received videos are saved
 SAVE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "received_videos")
