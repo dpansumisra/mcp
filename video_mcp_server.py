@@ -15,6 +15,7 @@ import base64
 import os
 import sys
 from datetime import datetime
+
 from mcp.server.fastmcp import FastMCP
 
 # ---------------------------------------------------------------------------
@@ -105,15 +106,6 @@ def list_received_videos() -> str:
 
     return "\n".join(lines)
 
-
-# ---------------------------------------------------------------------------
-# ASGI app  (used by uvicorn for HTTP / Render deployment)
-# ---------------------------------------------------------------------------
-# Expose the Starlette app at module level so uvicorn can import it:
-#   uvicorn video_mcp_server:app --host 0.0.0.0 --port 8000
-app = mcp.streamable_http_app()
-
-
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -125,7 +117,16 @@ if __name__ == "__main__":
         import uvicorn
         print(f"[VideoReceiverMCP] Starting HTTP server on port {port} ...")
         print(f"[VideoReceiverMCP] MCP endpoint: http://0.0.0.0:{port}/mcp")
-        uvicorn.run(app, host="0.0.0.0", port=port)
+        # Create the ASGI app here (not at module level) so uvicorn owns
+        # the full lifespan and the session manager starts correctly.
+        http_app = mcp.streamable_http_app()
+        uvicorn.run(
+            http_app,
+            host="0.0.0.0",
+            port=port,
+            proxy_headers=True,      # trust Render/Railway SSL-terminating proxy
+            forwarded_allow_ips="*", # fixes 421 Misdirected Request
+        )
     else:
         # Default: stdio for Claude Desktop / Cursor / local agents
         mcp.run(transport="stdio")
