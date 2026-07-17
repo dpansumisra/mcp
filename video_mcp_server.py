@@ -106,6 +106,14 @@ def list_received_videos() -> str:
 
     return "\n".join(lines)
 
+
+# ---------------------------------------------------------------------------
+# ASGI app — exported so Render can run:
+#   uvicorn video_mcp_server:app --host 0.0.0.0 --port $PORT
+# ---------------------------------------------------------------------------
+app = mcp.streamable_http_app()
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -117,11 +125,8 @@ if __name__ == "__main__":
         import uvicorn
         print(f"[VideoReceiverMCP] Starting HTTP server on port {port} ...")
         print(f"[VideoReceiverMCP] MCP endpoint: http://0.0.0.0:{port}/mcp")
-        # Create the ASGI app here (not at module level) so uvicorn owns
-        # the full lifespan and the session manager starts correctly.
-        http_app = mcp.streamable_http_app()
         uvicorn.run(
-            http_app,
+            app,
             host="0.0.0.0",
             port=port,
             proxy_headers=True,      # trust Render/Railway SSL-terminating proxy
