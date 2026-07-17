@@ -1,0 +1,21 @@
+# render.yaml
+# Deploy this MCP server on Render (https://render.com) for free.
+# Render supports persistent Python processes, which MCP HTTP transport needs.
+#
+# Steps:
+#   1. Push this repo to GitHub
+#   2. Go to https://dashboard.render.com -> New -> Web Service
+#   3. Connect your GitHub repo
+#   4. Render auto-detects this file and configures everything
+#   5. Your MCP endpoint will be: https://<your-app>.onrender.com/mcp
+
+services:
+  - type: web
+    name: video-receiver-mcp
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn video_mcp_server:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PORT
+        value: "8000"
+    healthCheckPath: /health
