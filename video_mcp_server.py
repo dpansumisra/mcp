@@ -150,7 +150,6 @@ app = mcp.streamable_http_app()
 
 app.mount("/videos", StaticFiles(directory=SAVE_DIR), name="videos")
 
-@app.route("/")
 async def homepage(request):
     try:
         files = sorted(os.listdir(SAVE_DIR))
@@ -376,6 +375,8 @@ async def homepage(request):
 </html>
 """
     return HTMLResponse(html_content)
+
+app.add_route("/", homepage)
 
 
 # ---------------------------------------------------------------------------
