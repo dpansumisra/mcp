@@ -1,0 +1,287 @@
+================================================================================
+  HOW WE CREATED THE VIDEO MCP SERVER & HOW VIDEO TRANSFER WORKS
+================================================================================
+
+
+────────────────────────────────────────────────────────────────────────────────
+PART 1 — WHAT IS MCP?
+────────────────────────────────────────────────────────────────────────────────
+
+MCP stands for Model Context Protocol. It is an open protocol created by
+Anthropic that lets AI models (like Claude) communicate with external tools
+and services. The AI acts as a "client" and the external service acts as a
+"server". The AI can call tools defined on the server to perform real actions
+like reading files, making API calls, or — in our case — storing and
+retrieving videos.
+
+MCP uses JSON-RPC under the hood, which means everything is sent as text
+(JSON). This is important for understanding how videos are transferred.
+
+
+────────────────────────────────────────────────────────────────────────────────
+PART 2 — HOW WE BUILT THE MCP SERVER
+────────────────────────────────────────────────────────────────────────────────
+
+STEP 1: Chose the right library
+--------------------------------
+We used the official Python "mcp" library (pip install mcp>=1.0.0). It provides
+a class called FastMCP which makes it easy to define tools that any MCP client
+can call.
+
+STEP 2: Defined MCP Tools
+--------------------------
+We decorated Python functions with @mcp.tool() to expose them as callable
+tools. Four tools were created:
+
+  • receive_video(video_base64, filename, description)
+      Accepts a Base64-encoded video string, decodes it back to binary,
+      and saves it as a file on the server in a folder called received_videos/.
+
+  • list_received_videos()
+      Reads the received_videos/ folder and returns a formatted list of all
+      stored video filenames and their sizes.
+
+  • delete_video(filename)
+      Deletes a specific video file from the received_videos/ folder.
+
+  • download_video(filename)
+      Reads a stored video file, Base64-encodes it, and returns it as a
+      JSON string so the client can decode and save it locally. This is the
+      reverse of receive_video — the same Base64 trick, but in the opposite
+      direction.
+
+STEP 3: Chose the HTTP transport
+----------------------------------
+MCP supports two transport modes:
+  - stdio: communicates through stdin/stdout — used for local agents.
+  - Streamable HTTP: communicates over HTTP — needed for remote/cloud servers.
+
+We used Streamable HTTP so the server can run on Render.com and be accessible
+from anywhere over the internet. The MCP endpoint is exposed at the /mcp path.
+
+STEP 4: Added a Web Gallery
+-----------------------------
+In addition to the MCP endpoint, we added:
+  - A web gallery at / (the homepage) that shows all stored videos and lets
+    you play them in a browser.
+  - A static file mount at /videos/ so video files can be served directly
+    via URL.
+
+This was done using Starlette (the same ASGI framework that FastMCP uses
+internally). A critical design rule: the MCP app from mcp.streamable_http_app()
+MUST remain the top-level ASGI app handed to uvicorn. This is because FastMCP
+internally uses an async task group (initialized during lifespan startup) to
+manage streaming sessions. If you wrap it inside another Starlette app, the
+inner MCP app's lifespan never runs, the task group is never initialized, and
+every /mcp request crashes with:
+
+    RuntimeError: Task group is not initialized. Make sure to use run().
+
+The correct pattern is:
+    app = mcp.streamable_http_app()   ← top-level (lifespan runs OK)
+    app.mount("/videos", ...)         ← add extra routes onto it
+    app.add_route("/", homepage)
+
+STEP 5: Added Retry Logic to the Client
+-----------------------------------------
+Render's free tier spins the server down after ~15 minutes of inactivity. The
+first connection after a sleep period fails with a ConnectError while the
+server wakes up (can take 30–60 seconds). The client automatically retries
+up to 5 times with increasing delays (5s, 10s, 15s, 20s, 30s) before giving
+up.
+
+STEP 6: Deployed to Render.com
+--------------------------------
+Render.com was chosen because:
+  - It supports persistent Python processes (needed for Streamable HTTP MCP).
+  - Netlify and similar platforms run serverless/stateless functions that
+    cannot keep a persistent HTTP connection open — MCP requires this.
+
+The render.yaml file tells Render how to build and start the server:
+  Build command : pip install -r requirements.txt
+  Start command : uvicorn video_mcp_server:app --host 0.0.0.0 --port $PORT
+                  --proxy-headers --forwarded-allow-ips=*
+
+The --proxy-headers flag is needed because Render uses an SSL-terminating
+reverse proxy in front of the application.
+
+
+────────────────────────────────────────────────────────────────────────────────
+PART 3 — HOW VIDEOS ARE SENT VIA MCP (UPLOAD)
+────────────────────────────────────────────────────────────────────────────────
+
+The core challenge: MCP uses JSON-RPC which is a text-only protocol. Video
+files are binary data. Binary data cannot be put directly into a JSON string.
+
+The solution: BASE64 ENCODING
+
+Base64 is a way to convert any binary data (like a video file) into a string
+of plain ASCII text characters. The text is larger than the original binary
+(about 33% bigger) but it can safely travel inside a JSON message.
+
+Here is the full journey of a video from sender to server (UPLOAD):
+
+  SENDER (client machine)
+  │
+  │  1. Read the video file from disk as raw bytes.
+  │  2. Encode the bytes using Base64 → produces a long text string.
+  │  3. Call the MCP tool "receive_video" with the Base64 string as an argument.
+  │     This is sent as a JSON-RPC POST request to https://<server>/mcp
+  │
+  ↓ (travels over HTTPS as JSON text)
+  │
+  SERVER (Render.com)
+  │
+  │  4. The MCP server receives the JSON-RPC call.
+  │  5. FastMCP extracts the "video_base64" argument from the request.
+  │  6. The server decodes the Base64 string back into the original binary bytes.
+  │  7. The binary bytes are written to a file in received_videos/.
+  │  8. The server responds with a success message (file size, path, etc.)
+  │
+  ↓ (response travels back as JSON text)
+  │
+  SENDER
+     9. Client prints the server's response to the terminal.
+
+
+Simplified diagram (UPLOAD):
+
+  [Video File] → Base64 encode → [Text String] → JSON-RPC/HTTPS → [Server]
+                                                                       │
+                                                               Base64 decode
+                                                                       │
+                                                               [Video File saved]
+
+
+────────────────────────────────────────────────────────────────────────────────
+PART 4 — HOW VIDEOS ARE DOWNLOADED VIA MCP (DOWNLOAD)
+────────────────────────────────────────────────────────────────────────────────
+
+Downloading is the exact same Base64 trick — but in reverse. The server reads
+the file and encodes it; the client decodes and saves it.
+
+Here is the full journey of a video from server to client (DOWNLOAD):
+
+  SENDER (client machine)
+  │
+  │  1. Call the MCP tool "download_video" with the filename as an argument.
+  │     This is sent as a JSON-RPC POST request to https://<server>/mcp
+  │
+  ↓ (request travels over HTTPS as JSON text)
+  │
+  SERVER (Render.com)
+  │
+  │  2. The MCP server receives the JSON-RPC call.
+  │  3. FastMCP reads the file from received_videos/ as raw bytes.
+  │  4. The raw bytes are Base64-encoded into a text string.
+  │  5. The server responds with a JSON object:
+  │       { "filename": "clip.mp4",
+  │         "size_bytes": 10240,
+  │         "video_base64": "AAAB..." }
+  │
+  ↓ (response travels back as JSON text over HTTPS)
+  │
+  CLIENT
+     6. Client parses the JSON response.
+     7. Client Base64-decodes "video_base64" → raw bytes.
+     8. Client writes the bytes to a local file.
+     9. Video is restored on the client machine. ✅
+
+
+Simplified diagram (DOWNLOAD):
+
+  [Server File] → Base64 encode → [JSON Response] → HTTPS → [Client]
+                                                                 │
+                                                         Base64 decode
+                                                                 │
+                                                         [Video File saved locally]
+
+
+────────────────────────────────────────────────────────────────────────────────
+PART 5 — BUGS FIXED DURING DEVELOPMENT
+────────────────────────────────────────────────────────────────────────────────
+
+1. AttributeError: 'Starlette' object has no attribute 'route'
+   Cause  : Used @app.route("/") decorator which does not exist on Starlette.
+   Fix    : Replaced with app.add_route("/", homepage).
+
+2. RuntimeError: Task group is not initialized. Make sure to use run().
+   Cause  : Wrapped the MCP app inside a new Starlette(routes=[...]) wrapper.
+            This prevented the MCP app's lifespan from running, so its internal
+            async task group was never initialized.
+   Fix    : Kept mcp.streamable_http_app() as the top-level ASGI app and
+            added extra routes directly onto it.
+
+3. httpx.ConnectError / Server disconnected without sending a response
+   Cause  : Render free tier spins the server down after ~15 min of inactivity.
+            The first connection attempt while the server is waking fails.
+   Fix    : Added automatic retry logic to the client (up to 5 retries with
+            delays of 5s, 10s, 15s, 20s, 30s).
+
+4. httpx.HTTPStatusError: 421 Misdirected Request
+   Cause  : HTTP/2 connection coalescing on Render caused requests to be
+            sent to the wrong virtual host.
+   Fix    : Forced HTTP/1.1 in the client's httpx factory by setting
+            http2=False.
+
+
+────────────────────────────────────────────────────────────────────────────────
+PART 6 — PROJECT FILES OVERVIEW
+────────────────────────────────────────────────────────────────────────────────
+
+  video_mcp_server.py   Main server — defines MCP tools + web gallery
+  send_video_client.py  Client script to upload / list / delete / download
+  requirements.txt      Python dependencies
+  render.yaml           Render.com deployment configuration
+  Procfile              Alternative deployment config (Heroku/Railway)
+  setup.ps1             One-click local setup script (Windows)
+  HOW_IT_WORKS.txt      This file — explains the architecture
+  received_videos/      Folder where uploaded videos are stored (auto-created)
+
+
+────────────────────────────────────────────────────────────────────────────────
+PART 7 — SERVER ENDPOINTS SUMMARY
+────────────────────────────────────────────────────────────────────────────────
+
+  https://<your-app>.onrender.com/          Web gallery (view/play videos)
+  https://<your-app>.onrender.com/mcp       MCP endpoint (AI tools / client)
+  https://<your-app>.onrender.com/videos/   Static video files (direct URL)
+
+
+────────────────────────────────────────────────────────────────────────────────
+PART 8 — CLIENT USAGE QUICK REFERENCE
+────────────────────────────────────────────────────────────────────────────────
+
+  # Upload a video
+  python send_video_client.py myvideo.mp4 --url https://<app>.onrender.com/mcp
+
+  # List all stored videos
+  python send_video_client.py --url https://<app>.onrender.com/mcp --tool list
+
+  # Download a video to current directory
+  python send_video_client.py --url https://<app>.onrender.com/mcp --tool download --filename myvideo.mp4
+
+  # Download a video with a custom local filename
+  python send_video_client.py --url https://<app>.onrender.com/mcp --tool download --filename myvideo.mp4 --output saved_copy.mp4
+
+  # Delete a video from the server
+  python send_video_client.py --url https://<app>.onrender.com/mcp --tool delete --filename myvideo.mp4
+
+  # Show all available MCP tools
+  python send_video_client.py --url https://<app>.onrender.com/mcp --tool tools
+
+
+────────────────────────────────────────────────────────────────────────────────
+PART 9 — AVAILABLE MCP TOOLS SUMMARY
+────────────────────────────────────────────────────────────────────────────────
+
+  Tool name              Args                          Direction
+  ─────────────────────────────────────────────────────────────────────────────
+  receive_video          video_base64, filename?,       Client → Server (upload)
+                         description?
+  list_received_videos   (none)                         Query server storage
+  delete_video           filename                       Remove from server
+  download_video         filename                       Server → Client (download)
+
+
+================================================================================
