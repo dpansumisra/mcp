@@ -1,4 +1,4 @@
-﻿# VideoReceiverMCP
+# VideoReceiverMCP
 
 A minimal **MCP (Model Context Protocol) server** that receives video files over both:
 - **stdio** — for local agents (Claude Desktop, Cursor)
@@ -126,6 +126,8 @@ asyncio.run(send_video("myvideo.mp4", "https://your-app.onrender.com/mcp"))
 |------|------|-------------|
 | `receive_video` | `video_base64`, `filename?`, `description?` | Receives a base64 video, saves to `received_videos/` |
 | `list_received_videos` | — | Lists all saved videos |
+| `delete_video` | `filename` | Deletes a video from the server |
+
 
 ---
 

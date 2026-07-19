@@ -1,4 +1,4 @@
-﻿"""
+"""
 Video MCP Client
 ================
 Sends a video file to a VideoReceiverMCP server.
@@ -83,7 +83,14 @@ async def send_via_http(video_path: str, url: str):
         print("ERROR: mcp streamable_http client not available. Update mcp package.")
         sys.exit(1)
 
-    async with streamablehttp_client(url) as (read, write, _):
+    import httpx
+
+    def http1_client_factory(**kwargs) -> httpx.AsyncClient:
+        """Force HTTP/1.1 — HTTP/2 connection coalescing causes 421 on Render."""
+        kwargs.pop("http2", None)
+        return httpx.AsyncClient(http2=False, **kwargs)
+
+    async with streamablehttp_client(url, httpx_client_factory=http1_client_factory) as (read, write, _):
         async with ClientSession(read, write) as session:
             await call_tools(session, video_path)
 
