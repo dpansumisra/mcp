@@ -141,6 +141,43 @@ def delete_video(filename: str) -> str:
         return f"ERROR: Failed to delete video: {exc}"
 
 
+@mcp.tool()
+def download_video(filename: str) -> str:
+    """
+    Downloads a stored video by returning it as a Base64-encoded string.
+
+    The caller should Base64-decode the returned string and write the
+    resulting bytes to a local file to reconstruct the original video.
+
+    Args:
+        filename: The filename of the video to download (e.g., 'clip.mp4').
+
+    Returns:
+        A JSON-like string with keys 'filename', 'size_bytes', and
+        'video_base64' (the Base64-encoded file content), or an error message.
+    """
+    import json
+
+    filename = os.path.basename(filename)  # prevent path traversal
+    file_path = os.path.join(SAVE_DIR, filename)
+
+    if not os.path.exists(file_path):
+        return f"ERROR: Video file '{filename}' not found."
+
+    try:
+        with open(file_path, "rb") as f:
+            raw = f.read()
+    except OSError as exc:
+        return f"ERROR: Failed to read video: {exc}"
+
+    return json.dumps({
+        "filename": filename,
+        "size_bytes": len(raw),
+        "video_base64": base64.b64encode(raw).decode("utf-8"),
+    })
+
+
+
 
 # ---------------------------------------------------------------------------
 # ASGI app — exported so Render can run:
