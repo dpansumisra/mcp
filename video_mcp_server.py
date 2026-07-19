@@ -19,8 +19,6 @@ from datetime import datetime
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.server import TransportSecuritySettings
-from starlette.applications import Starlette
-from starlette.routing import Route, Mount
 from starlette.staticfiles import StaticFiles
 from starlette.responses import HTMLResponse
 
@@ -376,16 +374,11 @@ async def homepage(request):
     return HTMLResponse(html_content)
 
 
-# Build the ASGI app by composing MCP app + gallery + static files
-_mcp_asgi = mcp.streamable_http_app()
-
-app = Starlette(
-    routes=[
-        Route("/", homepage),
-        Mount("/videos", StaticFiles(directory=SAVE_DIR), name="videos"),
-        Mount("/", _mcp_asgi),  # MCP handles /mcp endpoint
-    ]
-)
+# The MCP app MUST be the top-level ASGI app so its lifespan/task-group
+# is properly initialized by uvicorn. We just add our extra routes onto it.
+app = mcp.streamable_http_app()
+app.mount("/videos", StaticFiles(directory=SAVE_DIR), name="videos")
+app.add_route("/", homepage)
 
 
 # ---------------------------------------------------------------------------
