@@ -19,6 +19,8 @@ from datetime import datetime
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.server import TransportSecuritySettings
+from starlette.applications import Starlette
+from starlette.routing import Route, Mount
 from starlette.staticfiles import StaticFiles
 from starlette.responses import HTMLResponse
 
@@ -146,9 +148,6 @@ def delete_video(filename: str) -> str:
 # ASGI app — exported so Render can run:
 #   uvicorn video_mcp_server:app --host 0.0.0.0 --port $PORT
 # ---------------------------------------------------------------------------
-app = mcp.streamable_http_app()
-
-app.mount("/videos", StaticFiles(directory=SAVE_DIR), name="videos")
 
 async def homepage(request):
     try:
@@ -376,7 +375,17 @@ async def homepage(request):
 """
     return HTMLResponse(html_content)
 
-app.add_route("/", homepage)
+
+# Build the ASGI app by composing MCP app + gallery + static files
+_mcp_asgi = mcp.streamable_http_app()
+
+app = Starlette(
+    routes=[
+        Route("/", homepage),
+        Mount("/videos", StaticFiles(directory=SAVE_DIR), name="videos"),
+        Mount("/", _mcp_asgi),  # MCP handles /mcp endpoint
+    ]
+)
 
 
 # ---------------------------------------------------------------------------
