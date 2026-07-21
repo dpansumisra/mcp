@@ -1,0 +1,10 @@
+{
+  "servers": {
+    "video-proxy": {
+      "command": "python",
+      "args": [
+        "d:/workspace/mcp/video_proxy_mcp.py"
+      ]
+    }
+  }
+}

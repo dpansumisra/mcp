@@ -167,5 +167,135 @@ mcp/
 ├── render.yaml             # Render deployment config
 ├── Procfile                # Railway / Heroku deployment
 ├── .gitignore
-└── received_videos/        # Videos saved here (auto-created)
+├── received_videos/        # Videos saved here (auto-created)
+├── video_proxy_mcp.py      # Local proxy MCP (VS Code / Antigravity IDE)
+└── .vscode/mcp.json        # MCP server config for VS Code / Antigravity IDE
 ```
+
+---
+
+## VS Code & Antigravity IDE Integration
+
+The local proxy (`video_proxy_mcp.py`) bridges your AI IDE to the remote Render server.  
+It handles **Base64 encoding automatically** — just pass a plain file path.
+
+### Architecture (detailed)
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│              AI Agent (Antigravity IDE / GitHub Copilot)    │
+│                  — asks to upload / download a video —      │
+└─────────────────────┬───────────────────────────────────────┘
+                      │  stdio  (JSON-RPC over stdin/stdout)
+                      ▼
+┌─────────────────────────────────────────────────────────────┐
+│                  video_proxy_mcp.py  (LOCAL)                │
+│                                                             │
+│  upload_video(path, description)                            │
+│    1. Path(path).read_bytes()   ← reads binary from disk    │
+│    2. base64.b64encode(raw)     ← ~33 % size overhead       │
+│    3. _call_remote("receive_video", {...})                  │
+│                                                             │
+│  download_video(filename, output_path)                      │
+│    1. _call_remote("download_video", {...})                 │
+│    2. base64.b64decode(response["video_base64"])            │
+│    3. Path(output_path).write_bytes(raw)                    │
+│                                                             │
+│  list_videos()   → _call_remote("list_received_videos", {}) │
+│  delete_video()  → _call_remote("delete_video", {...})      │
+└─────────────────────┬───────────────────────────────────────┘
+                      │  HTTPS  (Streamable-HTTP / JSON-RPC)
+                      │  timeout: 300 s (large file support)
+                      ▼
+┌─────────────────────────────────────────────────────────────┐
+│         https://mcp-rgi7.onrender.com/mcp  (REMOTE)         │
+│                  video_mcp_server.py                        │
+│                                                             │
+│  receive_video(video_base64, filename, description)         │
+│    1. base64.b64decode(video_base64) → raw bytes            │
+│    2. open(received_videos/<filename>, "wb").write(raw)     │
+│    3. returns status + file size                            │
+│                                                             │
+│  download_video(filename)                                   │
+│    1. open(received_videos/<filename>, "rb").read()         │
+│    2. returns JSON { filename, size_bytes, video_base64 }   │
+│                                                             │
+│  list_received_videos()  → scans received_videos/ on disk   │
+│  delete_video(filename)  → os.remove(received_videos/…)     │
+└─────────────────────┬───────────────────────────────────────┘
+                      │
+                      ▼
+              /opt/render/project/src/
+                  received_videos/
+                    clip.mp4
+                    demo.mp4
+                    ...
+```
+
+### Architecture (simplified overview — original)
+
+```
+AI Agent (VS Code / Antigravity IDE)
+       │  stdio
+       ▼
+video_proxy_mcp.py  (runs locally)
+       │
+       ├─ reads file from disk
+       ├─ Base64-encodes it
+       └─ forwards to remote MCP
+              │  HTTPS
+              ▼
+https://mcp-rgi7.onrender.com/mcp
+```
+
+### Setup
+
+The `.vscode/mcp.json` file is already in this repo. VS Code and Antigravity IDE
+both pick it up automatically on startup:
+
+```json
+{
+  "servers": {
+    "video-proxy": {
+      "command": "python",
+      "args": ["d:/workspace/mcp/video_proxy_mcp.py"]
+    }
+  }
+}
+```
+
+### Available proxy tools
+
+| Tool | What to say to the agent |
+|---|---|
+| `upload_video` | *"Upload D:\clips\demo.mp4 to the server"* |
+| `download_video` | *"Download clip.mp4 to C:\Downloads\clip.mp4"* |
+| `list_videos` | *"List all videos on the server"* |
+| `delete_video` | *"Delete clip.mp4 from the server"* |
+
+### VS Code — uploading a video
+
+![VS Code upload demo](assets/images/image.png)
+
+After the upload completes, the server confirms the file name, size, and saved path:
+
+![VS Code upload result](assets/images/image-3.png)
+
+Listing all videos stored on the server:
+
+![VS Code list videos](assets/images/image-4.png)
+
+
+
+
+### Antigravity IDE — uploading a video
+
+![Antigravity IDE upload demo](assets/images/image-1.png)
+![Antigravity IDE list videos](assets/images/image-5.png)
+After the upload the server returns the same confirmation:
+
+![Antigravity IDE upload result](assets/images/image-2.png)
+
+
+> **Note:** The Render free tier sleeps after inactivity. The **first request** may take
+> 30–60 seconds to wake the server up. Subsequent calls are fast.
