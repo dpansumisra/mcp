@@ -276,7 +276,8 @@ both pick it up automatically on startup:
 ### VS Code — uploading a video
 
 ![VS Code upload demo](assets/images/image.png)
-
+![alt text](assets/images/image-6.png)
+![alt text](assets/images/image-7.png)
 After the upload completes, the server confirms the file name, size, and saved path:
 
 ![VS Code upload result](assets/images/image-3.png)
